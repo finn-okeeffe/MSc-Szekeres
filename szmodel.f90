@@ -1,10 +1,5 @@
 module szmodel
-  ! functions specifying the Szekeres model
-
-  ! TODO: Replace integrator in bang_time_error with a more accurate one, the current
-  ! one varies massively with number of points. And we are wasting alot of points
-  ! at the end where it's not needed.
-  !   - Try estimating with elliptic integral (e.g. Dam)
+  ! functions specifying the Szekeres model and related methods
 
   use solveode
   use healpix_modules
@@ -22,7 +17,6 @@ module szmodel
   real, parameter :: j0 = 1.
   real, parameter :: t_0 = (1/(3*sqrt(Omega_Lambda)*H_0))* &
   &                       log((1+sqrt(Omega_Lambda))/(1-sqrt(Omega_Lambda)))
-  ! real, parameter :: PI=4.D0*DATAN(1.D0)
 
   ! Szekeres model parameters
   real, parameter :: M_0 = 0.5 * Omega_M * H_0**2
@@ -47,6 +41,7 @@ module szmodel
 contains
 
   subroutine set_params(params)
+    ! set parameters to values in given vector
     real, intent(in), dimension(3) :: params
     delta_0 = params(1)
     alpha = params(2)
@@ -79,27 +74,36 @@ contains
 
   ! dipole functions and derivatives
   subroutine get_dipoles_and_derivatives(r, S, P, Q, dS, dP, dQ, ddS, ddP, ddQ)
+    ! returns the dipole functions (S,P,Q) and their first and second derivative w.r.t. r
+
+    !! Arguments
     real, intent(in) :: r
     real, intent(out) ::  S, P, Q, dS, dP, dQ, ddS, ddP, ddQ
 
+    !! Local Variables
     real :: r_to_the_alpha_minus_two
 
+    ! shorthand
     r_to_the_alpha_minus_two = r**(alpha-2)
 
+    ! S(r) and its derivatives
     S = r_to_the_alpha_minus_two*r*r
     dS = alpha*r_to_the_alpha_minus_two*r
     ddS = alpha*(alpha-1)*r_to_the_alpha_minus_two
 
+    ! P(r) and its derivatives
     P = 0
     dP = 0
     ddP = 0
 
+    ! Q(r) and its derivatives
     Q = 0
     dQ = 0
     ddQ = 0
   end subroutine get_dipoles_and_derivatives
 
   function sz_S(r)
+    ! S(r) dipole function
     real, intent(in) :: r
     real :: sz_S
     
@@ -107,6 +111,7 @@ contains
   end function sz_S
 
   function sz_dS(r)
+    ! S'(r) dipole function first derivative
     real, intent(in) :: r
     real :: sz_dS
 
@@ -122,6 +127,7 @@ contains
   end function sz_ddS
 
   function sz_P(r)
+    ! P(r) dipole function
     real, intent(in) :: r
     real :: sz_P
 
@@ -129,6 +135,7 @@ contains
   end function sz_P
 
   function sz_dP(r)
+    ! P'(r) dipole function first derivative
     real, intent(in) :: r
     real :: sz_dP
 
@@ -144,12 +151,14 @@ contains
   end function sz_ddP
 
   function sz_Q(r)
+    ! Q(r) dipole function
     real, intent(in) :: r
     real :: sz_Q
     sz_Q = 0*r
   end function sz_Q
 
   function sz_dQ(r)
+    ! Q'(r) dipole function first derivative
     real, intent(in) :: r
     real :: sz_dQ
     sz_dQ = 0*r
@@ -186,15 +195,16 @@ contains
 !! R(t,r) interpolation and it's initialization
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function sz_arealR(t, r)
-    ! use linear interpolation to find R(t,r) for any
-    ! arguments
+    !! use bilinear interpolation to find R(t,r) for any r and t value
+
+    !! Arguments
     real, intent(in) :: t ! t value to find R at
     real, intent(in) :: r ! r value to find R at
 
-    ! return value
+    !! return value
     real :: sz_arealR ! value of R(t, r)
 
-    ! local variables
+    !! local variables
     real :: r_index, r_dec_part, t_index, t_dec_part
     real :: w11, w21, w12, w22
 
@@ -204,33 +214,32 @@ contains
     !   print*,"sz_arealR: r=",r
     ! end if
 
-    ! find indices
+    !! find indices in grid
     r_index = 1 + ((size(arealR_array,dim=2)-1) * r/max_r)
     r_dec_part = r_index - floor(r_index)
     t_index = 1 + ((size(arealR_array,dim=1)-1) * (t-t_domain(1))/(t_domain(2) - t_domain(1)))
     t_dec_part = t_index - floor(t_index)
 
 
-    ! interpolatation weights
+    !! calculate interpolatation weights for bilinear interpolation
     w11 = (1-r_dec_part)*(1-t_dec_part)
     w21 = (1-r_dec_part)*t_dec_part
     w12 = r_dec_part*(1-t_dec_part)
     w22 = r_dec_part*t_dec_part
 
-    ! interpolate
+    !! interpolate
     sz_arealR = w11*arealR_array(floor(t_index), floor(r_index)) + &
     &           w21*arealR_array(ceiling(t_index), floor(r_index)) + &
     &           w12*arealR_array(floor(t_index), ceiling(r_index)) + &
     &           w22*arealR_array(ceiling(t_index), ceiling(r_index))
-
-
   end function sz_arealR
 
 
   pure function dRdt(arealR,r)
+    !! Calculates derivative of R(t,r) with respect to t
+
     !! Arguments
     real, dimension(:), intent(in) :: arealR ! 1D array holding R(t,r_i) values
-    ! real, intent(in) :: t ! time at which R(t,r_i) values are taken
     real, dimension(:), intent(in) :: r ! r values where R(t,r_i) are taken.
 
     !! output
@@ -242,25 +251,29 @@ contains
 
   function dRdr(t,r,h)
     ! evaluate R'(t,r)
+
+    !! Arguments
     real, intent(in) :: t, r ! coords
-    real :: dRdr
     real, intent(in) :: h ! step size
 
+    !! Return value
+    real :: dRdr
     dRdr = (sz_arealR(t,r+h) - sz_arealR(t,r-h))/(2*h)
   end function dRdr
 
   subroutine find_arealR_array_omp(ti, tf, N, arealR0)
     ! solve dRdt to find R(t,r) on a grid using openMP
-    !! input arguments
+
+    !! Arguments
     real, intent(in) :: ti, tf ! initial and final t values
     integer, intent(in) :: N ! number of time steps
     real, dimension(size(r_array)-1), intent(in) :: arealR0 ! initial values of arealR on the grid r at ti excluding r=0
 
+    !! Local variables
     integer :: r_index, t_index
     real, dimension(1) :: arealR, r, k1, k2, k3, k4
     real :: t, h
     logical :: error
-
     real, parameter :: ONE_SIXTH = 1./6.
 
     ! evaluate step size
@@ -269,7 +282,7 @@ contains
     !! set easy R(t,r) values
     ! set values at r=0
     arealR_array(:,1) = 0.
-    ! set values at r=0
+    ! set values at present time (t=t_0)
     arealR_array(1,2:) = arealR0
 
     !! set easy t values
@@ -278,14 +291,18 @@ contains
 
     ! solve ode for remaining variables
     ! ODE doesn't depend on any derivatives w.r.t. r, so paralelllize and loop
-    !   first over r
+    !   first over r utilising OpenMP
     !$OMP PARALLEL DO PRIVATE(r_index,arealR,r,t,t_index,k1,k2,k3,k4) SHARED(arealR_array, t_array)
     do r_index = 1, size(arealR0)
+      ! initial values
       arealR = arealR0(r_index)
-      r = r_array(r_index+1)
       t = ti
+
+      ! radial coordinate
+      r = r_array(r_index+1)
+
+      !! evolve one time step using rk4
       do t_index = 1, N
-        !! evolve one time step using rk4
         ! determine slopes
         k1 = dRdt(arealR, r)
         k2 = dRdt(arealR + h*k1/2, r)
@@ -304,15 +321,17 @@ contains
   end subroutine find_arealR_array_omp
 
   subroutine find_arealR_array(ti, tf, N, arealR0)
-    ! solve dRdt to find R(t,r) on a grid
-    !! input arguments
+    ! solve dRdt to find R(t,r) on a grid, using methods from solveode.f90
+
+    !! Arguments
     real, intent(in) :: ti, tf ! initial and final t values
     integer, intent(in) :: N ! number of time steps
     real, dimension(size(r_array)), intent(in) :: arealR0 ! initial values of arealR on the grid r at ti
 
+    ! set t_domain with range where R(t,r) is found on
     t_domain = [ti, tf]
 
-    ! use RK4 to solve for R(t,r)
+    ! call RK4 from solveode.f90 to solve for R(t,r)
     call rk4(dRdt_wrapper, N, ti, tf, arealR0, arealR_array, t_array)
 
     ! set R(t,0) = 0 to remove NaNs
@@ -336,7 +355,7 @@ contains
 !! k(r) and it's derivatives, initialization found in initialize_k.f90
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   pure function sz_k(r)
-    ! interpolate k_array to find k(r)
+    ! interpolate k_array linearly to find k(r)
     ! arguments
     real, intent(in), dimension(:) :: r ! values r_i to find k(r_i) at
 
@@ -351,27 +370,26 @@ contains
     dec_part = indices - floor(indices)
     ! interpolate
     sz_k = dec_part*k_array(ceiling(indices))+(1-dec_part)*k_array(floor(indices))
-
   end function sz_k
 
   pure function dkdr(r,h)
-    ! evaluate R'(t,r)
+    ! evaluate k'(t,r) at r using sz_k and a finite difference
     real, intent(in) :: r ! coords
     real :: dkdr
-    real,intent(in) :: h ! step size
+    real,intent(in) :: h ! step size, must be larger than grid pixel size
     real, dimension(1) :: one_element_array
 
+    ! evaluate finite difference
     one_element_array = (sz_k([r+h]) - sz_k([r-h]))/(2*h)
     dkdr = one_element_array(1)
   end function dkdr
 
 
-
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  !! Useful functions
+  !! Other Useful functions
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function sz_F(t,r,p,q)
-    ! g_pp and g_qq
+    ! à la B&S 2020, shorthand for g_pp and g_qq
     real, intent(in) :: t,r,p,q ! coords
     real :: sz_F
 
@@ -379,7 +397,7 @@ contains
   end function sz_F
 
   function sz_H(t,r,p,q)
-    ! g_rr
+    ! à la B&S 2020, shorthand for g_rr
     real, intent(in) :: t, r, p, q ! coords
     real :: sz_H
     real, dimension(1) :: k
@@ -388,7 +406,8 @@ contains
   end function sz_H
 
   function inner_product(vector1, vector2, coords)
-    ! finds inner product of two vectors, i.e. g(v1, v2)
+    ! finds inner product of two vectors, i.e. g(vector1, vector2)
+    ! vector1 and vector2 must be given in projective coordinates
     real, dimension(4), intent(in) :: vector1, vector2, coords
     real :: inner_product
 

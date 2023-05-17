@@ -1,7 +1,7 @@
 import numpy as np
 import szekeres as sz
 from scipy.optimize import minimize
-from two_structs_prob_funcs import *
+from szekeres_prob_funcs import *
 import emcee
 
 # print(sz.__doc__)

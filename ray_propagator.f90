@@ -1,109 +1,95 @@
+! Contains methods and types for raytracing. Including:
+!   - initialising rays
+!   - calculating derivatives with respect to the affine parameter lambda
+!   - solving geodesic equations numerically
+
 module ray_propagator
-
-
-  ! methods and types for ray tracing
   use szmodel
   implicit none
 
-  real, parameter :: max_precision = 100
-  real, parameter :: min_theta = pi/2
-  integer, parameter :: test_steps = 20001
-  real, parameter :: r_stop = 400 ! point at which geometry ~ FLRW
+  ! PARAMETERS FOR RAY TRACING
+  real, parameter :: min_theta = pi/2 ! if the ray's theta coordinate gets less than min_theta, invert the ray
+  integer, parameter :: test_steps = 20001 ! number of steps to record when saving a ray history
+  real, parameter :: r_stop = 400 ! point at which geometry ~ FLRW, terminate when ray reaches this r value
+
 
   type ray
-    ! represents a ray, holds relevant data
+    !! represents a ray, holds relevant data
+
+    !! PHYSICAL AND MATHEMATICAL DATA
     real(8), dimension(2) :: sky_angles ! position on sky of initial ray
     !                               [theta, phi]
+
     real, dimension(10) :: state_vector ! holds current state
     ! state_vector = [coords, 4 momentum, d_A, dd_A/ds]
+
     real :: affine_parameter ! current affine parameter value
-    real :: d_L
+
+    real :: d_L ! current luminosity distance from the observer
+
+
+    !! INVERSION DATA
     logical :: inverted = .FALSE. ! whether photon stats are inverted from
     !                             the original coordinates
-    logical :: to_be_inverted = .FALSE.
+    logical :: to_be_inverted = .FALSE. ! whether the photon needs to be inverted
+
+    integer :: times_inverted ! how many times this particular ray has been inverted
 
 
-    integer :: times_inverted
-
+    !! ERROR DATA
     logical :: errored ! if true, ray must be discarded. Set to true when:
     !                         - r<0 at any point in ray tracing process.
-    character(len = 20) :: err_message
 
-    real, allocatable :: stv_history(:,:)
-    real, allocatable :: aff_param_hist(:)
-    logical, allocatable :: inv_hist(:)
+    character(len = 20) :: err_message ! why errored was set to TRUE
+
+    !! HISTORY DATA
+    real, allocatable :: stv_history(:,:) ! ray history, for bug checking
+    !                                axis 0: history index
+    !                                axis 1: component of state_vector
+
+    real, allocatable :: aff_param_hist(:) ! affine parameters corresponding to stv_history
+    logical, allocatable :: inv_hist(:) ! whether the ray was inverted at each point in the history
   end type ray
 
 
 contains
   subroutine propagate_ray(photon, d_L, lam_step_size, test)
-    ! evolves a ray back in time from the observer to distance d_L from the observer
+    ! evolves a ray back in time from the observer until it either reaches d_L or r_stop
+
+    !! Arguments
     type(ray), intent(inout) :: photon ! ray to propagate
-    real, intent(in) :: d_L ! luminosity distance to max out at
+    real, intent(in) :: d_L ! luminosity distance to terminate propogation at
                             ! if negative, will run until reaching r_stop
     real, intent(in) :: lam_step_size ! size of step in affine parameter
-    logical, intent(in) :: test
+    logical, intent(in) :: test ! if TRUE, run test procedures
 
+    ! Local variables
     logical :: errored
     integer :: i
     real :: step, S, P, Q, norm
 
-    !! TESTING
-    real, dimension(10) :: old_sv
-
     i = 2
-    old_sv = photon%state_vector
+
+    ! If testing, set up history
     if ( test ) then
       photon%stv_history(1,:) = photon%state_vector
       photon%aff_param_hist(1) = 0
     end if
 
-      ! normal code
-      ! print*,"test diff_state_vector", diff_state_vector(photon%state_vector, 0.)
-      ! solve using rk4 in Szekeres up until photon reaches desired d_L or r_max
+    ! solve geodesic equations using rk4 in Szekeres up until photon reaches desired d_L or r_max
     do
       ! rk4 update step
       step = lam_step_size
-      ! if ( photon%state_vector(2) < 1 ) then
-      !   step = step/100
-      ! end if
       call rk4_step(diff_state_vector, photon%state_vector, &
       &             photon%affine_parameter, step, errored)
       ! set luminosity distance using reciprocity theorem
       photon%d_L = photon%state_vector(9)*(photon%state_vector(5)**2)
 
-      ! S = sz_S(photon%state_vector(2))
-      ! P = sz_P(photon%state_vector(2))
-      ! Q = sz_Q(photon%state_vector(2))
-      ! if ( photon%inverted ) then
-      !   norm = P**2 + Q**2 + S**2
-      !   S = S/norm
-      !   P = P/norm
-      !   Q = Q/norm
-      ! end if
-
-
-
-      old_sv = photon%state_vector
-
-      !! check if p and q too large, if so perform inversion
-      ! if ( max(abs(photon%state_vector(3)),abs(photon%state_vector(4))) > max_precision) then
-      !   call invert_ray(photon)
-      ! end if
-      ! invert when (p,q) gets below theta=min_theta rather than at a fixed (p,q),
-      !   that seems to avoid rapid changes in (p,q) around blow up,
-      !   keeping the error low
-      ! if (sum((photon%state_vector(3:4)-[P,Q])**2) > (S/tan(min_theta/2))**2) then
-      !   call invert_ray(photon)
-      ! end if
-      ! if (sum(photon%state_vector(3:4)**2) > 1/tan(min_theta/2)**2) then
-      !   call invert_ray(photon)
-      ! end if
+      ! Invert ray if needed
       if ( photon%to_be_inverted ) then
         call invert_ray(photon)
         photon%to_be_inverted = .FALSE.
       end if
-
 
       ! record geodesic history if test=TRUE
       if ( test .and. i .le. test_steps) then
@@ -124,7 +110,7 @@ contains
         exit
       end if
 
-      ! exit when tracing CMB if reached FLRW region
+      ! exit when tracing CMB if ray reached FLRW region
       if ( d_L < 0 .and.  photon%state_vector(2) > r_stop) then
         exit
       end if
@@ -135,12 +121,13 @@ contains
 
   contains
     subroutine diff_state_vector(s_vec,aff_param, dsdt, error)
-      ! derivative of the state vector
+      ! derivative of the state vector with respect to the affine parameter
+
       ! arguments and return value
       real, intent(in), dimension(:) :: s_vec ! state vector of photon
       real, intent(in) :: aff_param ! affine parameter value
       real, intent(out), dimension(size(s_vec)):: dsdt ! derivative for rk4_step
-      logical, intent(out) :: error
+      logical, intent(out) :: error ! if calculation failed
 
       ! local variables
       real, dimension(4) :: diff_4p ! derivative of the 4-momentum
@@ -162,24 +149,24 @@ contains
 
       r_step=r_array(2)
 
-      ! if NaN's appear
+      ! if NaN's appear log an error
       if (any(.not. s_vec == s_vec)) then
+              print*,"Warning: NaN in s_vec in diff_state_vector subroutine"
               print*,"NaN in s_vec:",s_vec
               print*,"sky angles:",photon%sky_angles
       end if
 
-
-      !! check for errored
+      !! check if ray is too close to origin
       if ( s_vec(2) < r_step ) then
         ! print*,"too small r photon",s_vec(2)
         dsdt = 0.
         ! photon%errored = .TRUE.
         photon%err_message = "radius too small"
         error = .TRUE.
+      
+      ! if ray is fine, calculate the derivatives
       else
-        !! calculate derivative
-        ! values needed
-
+        !! shorthand values used
         kpq2 = s_vec(7)**2 + s_vec(8)**2                           ! kp**2 + kq**2
         kr2 = s_vec(6)**2                                                  ! kr**2
 
@@ -195,17 +182,18 @@ contains
           k = one_element_array(1)
           dk = dkdr(s_vec(2), r_step)                                       !k'(r)
         else ! in FLRW region
-          arealR = s_vec(2)*sz_arealR(s_vec(1),max_r)/max_r
-          darealRdr = sz_arealR(s_vec(1),max_r)/max_r
-          Rdashdash = 0.
-          k = k_0*s_vec(2)**2
-          dk = 2*k_0*s_vec(2)
+          arealR = s_vec(2)*sz_arealR(s_vec(1),max_r)/max_r                ! R(t,r)
+          darealRdr = sz_arealR(s_vec(1),max_r)/max_r                     ! R'(t,r)
+          Rdashdash = 0.                                                 ! R''(t,r)
+          k = k_0*s_vec(2)**2                                                ! k(r)
+          dk = 2*k_0*s_vec(2)                                               ! k'(r)
         end if
         one_over_one_minus_k = 1/(1-k)
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !! DIPOLE FUNCTIONS
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! get Szekeres dipole functions and their derivatives
         call get_dipoles_and_derivatives(s_vec(2), S,P,Q,dS,dP,dQ,ddS,ddP,ddQ)
 
         ! adjust dipole function and derivatives if photon is inverted
@@ -239,7 +227,7 @@ contains
 
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        !! FUNCTIONS APPEARING IN CONNECTION
+        !! SHORTHAND FUNCTIONS APPEARING IN CONNECTION (à la B&S 2020)
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         pdiff = (s_vec(3)-P)/S                                          !(p-P)/S
         qdiff = (s_vec(4)-Q)/S                                          !(q-Q)/S
@@ -279,7 +267,6 @@ contains
         dF(4) = -a1**2*E*qdiff/2                                           ! dF/dp
 
         !! DERIVATIVES OF H
-
         dH(1) = 2*a2*(darealRdrdt - darealRdt*EdashOverE)*one_over_one_minus_k !dH/dt
         dH(2) = (2*a2*(Rdashdash-darealRdr*EdashOverE-arealR*EEdr) &       ! dH/dr
         &         + H*dk)*one_over_one_minus_k
@@ -288,32 +275,38 @@ contains
 
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        !! DERIVATIVES OF STATE VECTOR DERIVATIVE
+        !! DERIVATIVES OF STATE VECTOR COMPONENTS
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! 4-Momentum derivative
         diff_4p = 0.
         diff_4p(1) = -0.5*(dH(1)*kr2 + dF(1)*kpq2)
         diff_4p(2) = (0.5*(dH(2)*kr2 + dF(2)*kpq2) - s_vec(6)*sum(dH*s_vec(5:8)))/H
         diff_4p(3) = (0.5*(dH(3)*kr2 + dF(3)*kpq2) - s_vec(7)*sum(dF*s_vec(5:8)))/F
         diff_4p(4) = (0.5*(dH(4)*kr2 + dF(4)*kpq2) - s_vec(8)*sum(dF*s_vec(5:8)))/F
 
-        
+        ! Angular diameter distance derivative
         diff_d_A = -0.5*s_vec(9)*(dM-3*M*EdashOverE)*s_vec(5)**2 /(a2*arealR**2)
+
         ! set derivative vector
         dsdt = [s_vec(5:8), diff_4p, s_vec(10),diff_d_A]
+
+        ! successfully calculated dsdt, reflect in error variable
         error = .FALSE.
 
+        ! look for NaNs in dsdt
         if (any(.not. dsdt == dsdt)) then
+                print("Warning!: NaNs in dsdt in diff_state_vector subroutine")
                 print*,"NaN in dsdt:",dsdt
         end if
 
       
-      ! check if photon needs to be inverted
+      ! check if photon needs to be inverted, if so set to_be_inverted to TRUE
       if (sum((s_vec(3:4)-[P,Q])**2) > (S/tan(min_theta/2))**2) then
         photon%to_be_inverted = .TRUE.
       end if
 
 
-
+      ! print statements for debugging
         ! if ( diff_4p(2) > 1.e2 ) then
         !   print*,"Large dk^r:", diff_4p(2)
         !   print*,"  coords:", s_vec(1:4)
@@ -332,23 +325,22 @@ contains
         ! end if
 
       end if
-
-
-
     end subroutine diff_state_vector
   end subroutine propagate_ray
 
 
   function new_ray(sky_angles, coords, record_history)
-    ! initializes a new ray at coords pointing at direction sky_angles in the sky
-    real(8), dimension(2), intent(in) :: sky_angles ! direction in sky that ray comes from
+    !! initializes a new ray at coords pointing in direction sky_angles in the sky
+
+    !! Arguments:
+    real(8), dimension(2), intent(in) :: sky_angles ! direction in sky that ray is observed in
     !                                 [theta, phi]
     real, dimension(4), intent(in) :: coords ! coordinates of the observer
-    logical, intent(in) :: record_history
+    logical, intent(in) :: record_history ! if history of the ray should be recorded for testing
     type(ray) :: new_ray ! ray object to return
 
-    ! local variables
-    real, dimension(4) :: four_momentum
+    !! local variables
+    real, dimension(4) :: four_momentum ! initial 4-momentum of the ray
     real, dimension(3) :: local_3p ! spatial components of momentum in the local frame
 
     !! initialise the easy stuff
@@ -359,6 +351,7 @@ contains
     new_ray%errored = .FALSE.
     new_ray%to_be_inverted = .FALSE.
 
+    !! allocate history variables and print test logs if needed
     if ( record_history ) then
       print*,"Allocating History arrays with",test_steps,"steps"
       allocate(new_ray%stv_history(test_steps, 10))
@@ -390,12 +383,15 @@ contains
   end function new_ray
 
   subroutine invert_ray(photon)
-    ! perform inversion on a ray
+    !! perform inversion on a ray
+
+    !! Arguments:
     type(ray), intent(inout) :: photon
+
+    !! Local Variabels
     real :: pq_norm
     real :: p, q
 
-    ! print*,"INVERTING"
     ! transform coordinates
     p = photon%state_vector(3)
     q = photon%state_vector(4)

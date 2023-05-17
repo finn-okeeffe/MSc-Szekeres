@@ -1,3 +1,4 @@
+! Methods for solving ordinary differential equations
 module solveode
 
   implicit none
@@ -72,8 +73,9 @@ contains
     real, intent(in)                :: h    ! step size
     logical, intent(out) :: error
 
-    ! ode: function returning f(y,t), takes arguments y and t representing the
-    !     current y value (real array) and the current time value (real scalar)
+    ! ode: subroutine returning f(y,t), takes arguments y and t representing the
+    !     current y value (real array) and the current time value (real scalar),
+    !     errored = TRUE if ode failed to complete
     interface
       subroutine ode(y, t, dydt, errored)
         real, intent(in), dimension(:) :: y
@@ -97,8 +99,8 @@ contains
     ! evaluate step
     t_n = t_n + h
     y_n = y_n + (1/6.)*h*(k1 + 2*k2 + 2*k3 + k4)
-
+    
+    ! return error=TRUE if any slope failed to evaluate
     error = err1 .or. err2 .or. err3 .or. err4
-
   end subroutine rk4_step
 end module solveode

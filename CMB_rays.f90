@@ -1,3 +1,6 @@
+! Performs applies ray_tracing.f90 and HEALPix to compute the CMB anisotropy on
+! the sky and its spherical harmonic decomposition
+
 module CMB_rays
   use ray_propagator
   use omp_lib
@@ -17,24 +20,28 @@ module CMB_rays
 contains
 
   subroutine healpix_CMB_aniso(obs_coords, lambda_step, aniso_map, errored)
-    ! calculates CMB anisotropy healpix map in ring order
+    ! calculates CMB anisotropy on the sky for a healpix map in ring order
+    ! using ray_propagator.f90 for ray tracing
 
     !! arguments
-    real, intent(in) :: lambda_step, obs_coords(4)
-    real, dimension(0:N_PIX-1), intent(out) :: aniso_map
-    logical, dimension(0:N_PIX-1) :: errored
+    real, intent(in) :: lambda_step, obs_coords(4) ! step size for ray tracing, coordinates of observer
+    real, dimension(0:N_PIX-1), intent(out) :: aniso_map ! HEALPix map of CMB anisotropy
+    logical, dimension(0:N_PIX-1) :: errored ! whether the ray tracing succeded
 
     !! local variables:
-    real(8) :: theta, phi
-    real :: avg
-    integer :: pix_num
-    type(ray) :: private_ray
+    real(8) :: theta, phi ! angles on the sky
+    real :: avg ! average of a value over the sky
+    integer :: pix_num ! pixel number in the HEALPix map
+    type(ray) :: private_ray ! ray object for use with propogate_ray
 
-    real :: coords(4), fourmom(4)
+    real :: coords(4), fourmom(4) ! coordinates and four momentum of a ray
 
     errored = .FALSE.
-    !! Create and propagate rays
+
+    !! open file to save rays to
     open(2, file="CMB_state_vectors.dat", status="replace")
+
+    !! Loop over each pixel using multiprocessing, performing ray tracing and calculating a redshift-related factor
     !$OMP PARALLEL PRIVATE(private_ray, phi, theta, pix_num) SHARED(aniso_map, errored)
       !$OMP DO
       do pix_num = 0, N_PIX-1
@@ -47,20 +54,22 @@ contains
         !! PROPAGATE RAY
         call propagate_ray(private_ray, -1., lambda_step, .FALSE.)
 
-        !! calculate factor accounting for remaining redshift
+        !! calculate redshift-realted factor accounting for remaining redshift if ray tracing was successful
         if ( .not. private_ray%errored ) then
           aniso_map(pix_num) = max_r / (private_ray%state_vector(5) * &
           & sz_arealR(private_ray%state_vector(1),max_r)) ! 1/((1+z)*a(t))
 
+          ! Perform an inversion if the ray is inverted
           if ( private_ray%inverted ) then
             call invert_ray(private_ray)
           end if
 
+          ! save rays to file
           coords = private_ray%state_vector(1:4)
           fourmom = private_ray%state_vector(5:8)
-          
           write(2,*) pix_num, theta, phi, inner_product(fourmom,fourmom,coords), private_ray%state_vector
         else
+          ! log if the ray-tracing failed
           print*,"Errored, pix num:", pix_num,"radius:",private_ray%state_vector(2)
           print*,"error message:", private_ray%err_message
         end if
@@ -71,25 +80,28 @@ contains
     close(2)
 
 
-    !! calculate anisotropy
+    !! calculate anisotropy \Delta T / T_0
     avg = sum(aniso_map, mask=.not.errored)/count(.not.errored)
-    ! avg = sum(aniso_map)/N_PIX
     aniso_map = (aniso_map - avg)/avg ! = Delta T / T
   end subroutine healpix_CMB_aniso
 
 
   subroutine CMB_healpix_dipole_and_quadrupole(aniso_map, dipole, quadrupole)
-    real(dp), intent(in) :: aniso_map(0:N_PIX-1) ! Delta T / T
-    real, intent(out) ::  dipole, quadrupole
-    integer(i4b), parameter :: lmax = 2
-    complex(dpc) :: alm(1, 0:lmax, 0:lmax)
-    real(dp) :: cl(0:lmax,1)
+    ! calculated dipole and quadrupole power (C_1 and C_2) from HEALPix \Delta T/T_0 map
 
-    call map2alm(N_SIDE, lmax, lmax, aniso_map, alm)
-    call alm2cl(lmax, lmax, alm, cl)
+    !! Arguments
+    real(dp), intent(in) :: aniso_map(0:N_PIX-1) ! Delta T / T HEALPix map in ring order
+    real, intent(out) ::  dipole, quadrupole ! dipole and quadrupole power C_1, C_2
 
-    quadrupole = cl(2,1)*6*(MEAN_CMB_TEMP**2)/(2*pi) !K^2
-    dipole = 1.5*sqrt(cl(1,1)/pi)*MEAN_CMB_TEMP ! K
-    
+    !! Local variables
+    integer(i4b), parameter :: lmax = 2 ! calculate only dipole and quadrupole
+    complex(dpc) :: alm(1, 0:lmax, 0:lmax) ! holds the complex spherical decomposition a^l_m
+    real(dp) :: cl(0:lmax,1) ! holds the angular power
+
+    call map2alm(N_SIDE, lmax, lmax, aniso_map, alm) ! find a^l_m using HEALPix
+    call alm2cl(lmax, lmax, alm, cl) ! calculate C_l from a^l_m
+
+    quadrupole = cl(2,1)*6*(MEAN_CMB_TEMP**2)/(2*pi) ! quadrupole power in units K^2
+    dipole = 1.5*sqrt(cl(1,1)/pi)*MEAN_CMB_TEMP ! dipole component amplitude in units K
   end subroutine CMB_healpix_dipole_and_quadrupole
 end module CMB_rays

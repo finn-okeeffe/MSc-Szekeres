@@ -1,3 +1,5 @@
+! Runnable file, mostly used for running and saving individual cases, or debugging.
+
 program main
   use model_statistics
 
@@ -6,46 +8,53 @@ program main
   integer :: i
 
 
-    !! TESTING VARS
-    real :: ray_theta, ray_phi
-    type(ray) :: test_ray
+  !! TESTING VARS
+  real :: ray_theta, ray_phi
+  type(ray) :: test_ray
 
+  ! setup code
   call pre_model_setup(.TRUE.)
 
 
+  !! some notable parameters
   ! parameters: delta_0, alpha, r_0
   ! [-0.97174837  0.94948474 34.97985712 34.96396796  1.99449534] nlp: ~ 29.90 for COMP dip and CMB only
   ! [-0.58544466  0.85544953 57.57741181 55.77230181  2.63266338] nlp: ~ 28.50 for COMP dip and CMB only
   ! [-0.61739258  0.95       62.37448863 53.64650494  1.67415252] modified nlp: ~ 8.527 (COMP dip nlp/num_z + CMB dip nlp + CMB quad nlp)
- ! ([-0.80, 0.9, 55.0, 54.0, 0.7*np.pi]
+  ! ([-0.80, 0.9, 55.0, 54.0, 0.7*np.pi]
   ! [-0.53404086  0.95       64.88764856 48.27292444  1.87559392] modified nlp: ~7.766
+
+  !! set model parameters
   params = [-0.53404086, 0.95, 64.88764856]
   call set_params(params)
 
+  !! set observer coordinates
   ! angular_coords: r, theta, phi
   angular_coords =  [48.27292444, 1.87559392, 0.0]
 
 
-  ! convert from (r,theta,phi) to (r,p,q)
+  ! transform from (r,theta,phi) to (r,p,q)
   coords = [angular_coords(1), & ! r
   &         sz_P(angular_coords(1)) + sz_S(angular_coords(1))*cos(angular_coords(3))*&
   &                  cos(angular_coords(2)/2)/sin(angular_coords(2)/2), & !p
   &         sz_Q(angular_coords(1)) + sz_S(angular_coords(1))*sin(angular_coords(3))*&
   &                  cos(angular_coords(2)/2)/sin(angular_coords(2)/2)] !q
 
-
+  ! log transformed coords and parameters
   print*,"Projective Coords:",coords
   print*,"Parameters:", params
 
+  ! run simulation and save results
   print*,"executing saving iteration:"
   param_error = parameter_error(params, coords, .TRUE., .TRUE.)
   print*,"error:",param_error
 
+  ! save a large number of COMPOSITE mocks à la BNW
   print*,"Doing Mocks"
   call save_composite_mocks_multipoles(params, coords, .FALSE.)
   print*,"Done!"
 
-  ! test ray
+  !! Create and solve a single test ray for debugging
   ! print*,"Solving Dynamics"
   ! call init_k_newt_scalar(r, K_ERROR_INTEGRATION_NUM, MAX_K_ITERS)
   ! call find_arealR_array_omp(t_0, 0., num_steps, r)
@@ -72,13 +81,15 @@ program main
 
 contains
   function parameter_error(parameters, coordinates, initialise, save)
-    ! evaluates error function for a chosen model
-    real, intent(in) :: parameters(3), coordinates(3) ! parameters and coords
-    real :: parameter_error
+    ! Performs simulation and evaluates error function for a chosen model
+
+    !! Arguments and return value
+    real, intent(in) :: parameters(3), coordinates(3) ! parameters and observer coords
+    real :: parameter_error ! error to return
     ! params: (delta_0, alpha, r_0, D)
     ! coords: (r, p, q)
     logical, intent(in) :: save ! whether to save results
-    logical, intent(in) :: initialise ! whether to recalculate k(r) and R(t,r)
+    logical, intent(in) :: initialise ! whether to calculate k(r) and R(t,r) to initialise a new parameter set
 
     !! ERROR WEIGHTS
     real, parameter :: CMB_D1_WEIGHT = 1
@@ -91,16 +102,16 @@ contains
     &     d_vals(NUM_DATA_POINTS), sz_comp_C0(NUM_Z_POINTS), &
     &     sz_comp_C1(NUM_Z_POINTS), sz_comp_C2(NUM_Z_POINTS), &
     &     CMB_dipole, CMB_quad
-    real(8) :: theta, phi
-    complex :: CMB_a1m(-1:1)
+    real(8) :: theta, phi ! angle on the sky
+    complex :: CMB_a1m(-1:1) ! CMB complex a^l_m values
     integer :: j
     integer :: istart, ifinish ! for timing
-    logical :: CMB_errored(0:N_PIX-1)
+    logical :: CMB_errored(0:N_PIX-1) ! which rays failed ray-tracing when simulating the CMB
 
-    !! Set Szekeres model parameters
+    !! Set Szekeres model parameters in szmodel.f90
     call set_params(parameters)
 
-    !! Observer Coordinates
+    !! Observer Coordinates including time
     obs_coords = [t_0, coordinates(1), coordinates(2), coordinates(3)]
 
     !! solve dynamics if needed
@@ -110,6 +121,7 @@ contains
       call init_k_newt_scalar(r, K_ERROR_INTEGRATION_NUM, MAX_K_ITERS)
       call system_clock(ifinish)
       print*, "k(r) Initialisation time:",(ifinish-istart)/1000
+
       ! evolve R
       ! call find_arealR_array(t_0, t_0/2, num_steps, [0., r])
       call system_clock(istart)
@@ -117,7 +129,7 @@ contains
       call system_clock(ifinish)
       print*, "R(t,r) Initialisation time:",(ifinish-istart)/1000
 
-      ! ! save k(r) and R(t,r) if needed
+      ! ! save k(r) and R(t,r) if desired
       ! if ( save ) then
       !   print*,"Saving k(r_j) and R(t_i,r_j)"
       !   open(1, file="k_arr.dat", status="replace")
@@ -146,18 +158,16 @@ contains
 
     !! Compute dipole
     call system_clock(istart)
-    if ( any(CMB_errored) ) then
-      forall (i=0:N_PIX-1, CMB_errored(i)) aniso_map(i) = 0.
-      call CMB_healpix_dipole_and_quadrupole(aniso_map, CMB_dipole, CMB_quad)
-    else
-      call CMB_healpix_dipole_and_quadrupole(aniso_map, CMB_dipole, CMB_quad)
-    end if
+    ! set errored values to zero (essentially masking)
+    forall (i=0:N_PIX-1, CMB_errored(i)) aniso_map(i) = 0.
+    call CMB_healpix_dipole_and_quadrupole(aniso_map, CMB_dipole, CMB_quad)
+    ! log simulation results
     print*,"CMB DIPOLE:",CMB_dipole,"K"
     print*,"CMB QUADRUPOLE:",CMB_quad,"K^2"
     call system_clock(ifinish)
     print*, "CMB dipole calculation time:",(ifinish-istart)/1000
 
-    ! save aniso array
+    ! save \Delta T / T_0
     if ( save ) then
       print*, "Saving aniso_map"
       open(1, file="CMB_aniso_map.dat", status='replace')
@@ -181,14 +191,15 @@ contains
     call system_clock(ifinish)
     print*, "COMPOSITE raytracing time:",(ifinish-istart)/1000
 
-
+    ! compute spherical harmonic decomposition
     call system_clock(istart)
     z_vals = [(comp_rays(i)%state_vector(5)-1, i=1,NUM_DATA_POINTS)]
     d_vals = [(comp_rays(i)%d_L, i=1,NUM_DATA_POINTS)]
     call Hubble_Multipoles_true_d(z_vals, d_vals, sz_comp_C0, sz_comp_C1, sz_comp_C2)
     call system_clock(ifinish)
     print*, "Hubble power spectrum time:",(ifinish-istart)/1000
-
+    
+    ! save redshift factor and luminosity distance of each ray if desired
     if ( save ) then
       print*,"Saving mock composite z and d's"
       open(1, file="sz_z_d.dat", status="replace")
@@ -198,6 +209,7 @@ contains
       close(1)
     end if
 
+    ! save simulated COMPOSITE C_1 and C_2 values if desired
     if ( save ) then
       print*, "Saving mock composite dipole"
       open(1, file="sz_comp_C1_C2.dat", status='replace')
@@ -214,7 +226,8 @@ contains
     parameter_error = HUB_C1_WEIGHT*sum(abs((sz_comp_C1 - mean_comp_c1)/mean_comp_c1))/NUM_Z_POINTS+ &
     &     HUB_C2_WEIGHT*sum(abs((sz_comp_c2 - mean_comp_c2)/mean_comp_c2))/NUM_Z_POINTS + &
     &     CMB_D1_WEIGHT*abs((CMB_dipole/MEAN_CMB_TEMP - TRUE_CMB_D1)/TRUE_CMB_D1)
-    print*,"--RELATIVE ERROR, NOT RELATED TO DISTRIBUTION--"
+    ! log error function
+    print*,"--RELATIVE ERROR, NOT RELATED TO BAYESIAN DISTRIBUTION--"
     print*,"HUBBLE DIPOLE ERROR:", (sz_comp_C1 - mean_comp_c1)/mean_comp_c1
     print*,"HUBBLE QUADRUPOLE MAX ERROR:", (sz_comp_c2 - mean_comp_c2)/mean_comp_c2
   end function parameter_error
@@ -222,8 +235,11 @@ contains
 
 
   subroutine save_composite_mocks_multipoles(parameters, coordinates, initialise)
-    real, intent(in) :: parameters(3), coordinates(3)
-    logical, intent(in) :: initialise
+    ! compute and save a bunch of COMPOSITE mocks à la BNW
+
+    ! arguments:
+    real, intent(in) :: parameters(3), coordinates(3) ! model parameters and coordinates
+    logical, intent(in) :: initialise ! whether to calculate R(t,r) and k(r) to initialise new parameters
 
     !! local variables
     real :: obs_coords(4), z_vals(NUM_DATA_POINTS), &
@@ -263,7 +279,7 @@ contains
     call system_clock(ifinish)
     print*, "COMPOSITE raytracing time:",(ifinish-istart)/1000
 
-
+    ! calculate simulated COMPOSITE C_1 and C_2 using a large sample of random d_i's for each galaxy
     call system_clock(istart)
     z_vals = [(comp_rays(i)%state_vector(5)-1, i=1,NUM_DATA_POINTS)]
     d_vals = [(comp_rays(i)%d_L, i=1,NUM_DATA_POINTS)]
@@ -271,6 +287,7 @@ contains
     call system_clock(ifinish)
     print*, "Hubble power spectrum time:",(ifinish-istart)/1000
 
+    ! save C_1 and C_2 values calculated from mocks
     print*, "Saving COMPOSITE mocks multiples"
     open(1, file="sz_comp_Cl_mocks.dat", status='replace')
     do j = 1, NUM_Z_POINTS
@@ -278,6 +295,5 @@ contains
     end do
     close(1)
     print*,"finished"
-    
   end subroutine save_composite_mocks_multipoles
 end program main

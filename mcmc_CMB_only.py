@@ -1,20 +1,16 @@
+# perform MCMC analysis only considering the fit to the CMB
+
 import numpy as np
 import szekeres as sz
 from scipy.optimize import minimize
 from szekeres_prob_funcs import *
 import emcee
 
-# print(sz.__doc__)
-
-
-
 
 def log_prob_fixed_params(theta):
+    # returns log posterior probability only considering the CMB
     # theta = [delta_0, alpha, r_0, r_obs, theta_obs]
-
-    
     x = theta_to_x(theta)
-
     return log_posterior_CMB_only(x)
 
 
@@ -25,8 +21,13 @@ print("Setting up initial conditions...")
 ndim = 5
 nwalkers = 32
 
-# initial guess
-## random initial guesses
+## load backend (saving progress)
+print("Setting up backend...")
+filename = "TestRuns/CMB_only_backend.h5"
+backend = emcee.backends.HDFBackend(filename)
+
+##### INITIAL GUESS
+## generate random initial guesses
 # theta_0 = np.zeros((nwalkers,ndim))
 # for i in range(nwalkers):
 #     print("--------------------------------------------------------------")
@@ -38,19 +39,13 @@ nwalkers = 32
 #     if nlp == -np.inf:
 #         raise Exception("Chosen initial parameters have zero probability")
 #     print("--------------------------------------------------------------")
-
-# backend (saving progress)
-print("Setting up backend...")
-filename = "TestRuns/CMB_only_backend.h5"
-backend = emcee.backends.HDFBackend(filename)
-
-# New Backend
+# # New Backend
 # backend.reset(nwalkers, ndim)
 
-# # Resume from saved backend
+## Resume progressfrom saved backend
 theta_0 = None
 
-# Initialize the sampler
+##### INITIALISE THE EnsembleSampler
 print("Initializing the ensemble sampler...")
 sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob_fixed_params, backend=backend)
 
@@ -58,5 +53,5 @@ sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob_fixed_params, backend=b
 ##                      MCMC
 ####################################################################################
 print("Running MCMC...")
-num_samples = 20000
+num_samples = 20000 # size of catalogue to calculate
 sampler.run_mcmc(theta_0, num_samples, progress=True)

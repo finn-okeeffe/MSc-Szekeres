@@ -24,7 +24,9 @@ The Python code utilises the following libraries:
 ☑️ Editing
 ☑️ Submitted
 ☑️ Marking has begun
-⬛ Marking complete
+☑️ Marking complete
 ⬛ Final changes made
+
+🎆**Grade Achieved: A+** 🎆
 
 Once final changes have been made I will add a link to the complete thesis.

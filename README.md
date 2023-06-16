@@ -29,4 +29,4 @@ The Python code utilises the following libraries:
 
 🎆**Grade Achieved: A+** 🎆
 
-Thesis can be viewed on the UC library website [here](http://dx.doi.org/10.26021/14659), or within the thesis file.
+Thesis can be viewed on the UC library website [here](http://dx.doi.org/10.26021/14659), or within the thesis folder.
